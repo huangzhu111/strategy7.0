@@ -426,77 +426,105 @@ class FuturesBacktestEngine:
         self.account.position = None
 
     def _handle_rollover(self, dt: datetime, bar: dict):
-        """处理月末换月"""
-        if self.account.position and self.account.position.size != 0:
-            position = self.account.position
-            if position.direction == "多":
-                pnl = (bar["close"] - position.entry_price) * position.size
-            else:
-                pnl = (position.entry_price - bar["close"]) * abs(position.size)
+        """处理月末换月（双策略各算各的）"""
+        if not (self.account.position and self.account.position.size != 0):
+            return
 
-            src = position.source
-            close_trade = TradeRecord(
-                trade_id=generate_trade_id(), signal_type="月末换月",
-                direction=position.direction, entry_date=position.entry_date,
-                entry_price=position.entry_price, exit_date=dt,
-                exit_price=bar["close"], size=abs(position.size),
-                pnl=pnl, commission=0.0, transfer_count=position.transfer_count,
-                is_closed=True, source=src, contract=position.contract,
-            )
-            self.account.execute_strategy_trade(close_trade, src)
+        position = self.account.position
 
-            self._pending_roll = True
-            self._roll_info = {
-                "direction": position.direction, "size": abs(position.size),
-                "old_contract": position.contract, "close_price": bar["close"],
-                "close_date": dt, "source": src,
-                "original_entry_price": position.original_entry_price,
-                "half_reduced": position.half_reduced,
-                "trade_id": position.trade_id,
-                "highest_price": position.highest_price,
-                "lowest_price": position.lowest_price,
-                "holding_days": position.holding_days,
-                "total_holding_days": position.total_holding_days,
-            }
-            self._last_roll_pnl = pnl
-            self.account.position = None
-            self._log("换月", f"月末平仓 {src} {position.direction} {abs(position.size)}手 @ {bar['close']:.2f}")
+        # 记录两个子策略各自的换月信息
+        self._roll_infos = []
+        for src_name in ["trend", "rsi"]:
+            sub_pos = self.pos_mgr.get_sub_position(src_name)
+            if sub_pos.has_position:
+                # 用子策略自己的入场价算盈亏
+                if sub_pos.direction == "多":
+                    sub_pnl = (bar["close"] - sub_pos.entry_price) * sub_pos.abs_size
+                else:
+                    sub_pnl = (sub_pos.entry_price - bar["close"]) * sub_pos.abs_size
+
+                # 记录信息（先close确保后续还要持仓记录）
+                self._roll_infos.append({
+                    "source": src_name,
+                    "direction": sub_pos.direction,
+                    "size": sub_pos.abs_size,
+                    "old_contract": position.contract,
+                    "close_price": bar["close"],
+                    "close_date": dt,
+                    "original_entry_price": sub_pos.entry_price,
+                    "pnl": sub_pnl,
+                })
+
+                sub_pos.close(bar["close"], sub_pos.abs_size)
+
+                close_trade = TradeRecord(
+                    trade_id=generate_trade_id(), signal_type="月末换月",
+                    direction=sub_pos.direction,
+                    entry_date=position.entry_date,
+                    entry_price=sub_pos.entry_price, exit_date=dt,
+                    exit_price=bar["close"], size=sub_pos.abs_size,
+                    pnl=sub_pnl, commission=0.0, transfer_count=0,
+                    is_closed=True, source=src_name, contract=position.contract,
+                )
+                self.account.execute_strategy_trade(close_trade, src_name)
+
+                self._log("换月",
+                    f"月末平仓 [{src_name}] {sub_pos.direction} {sub_pos.abs_size}手 @ {bar['close']:.2f}, "
+                    f"盈亏: {sub_pnl:+,.2f}"
+                )
+
+        self._pending_roll = True
+        self.account.position = None
 
     def _execute_roll_open(self, dt: datetime, bar: dict):
-        """执行月初开仓"""
-        info = self._roll_info
-        new_contract = self.data_feed.calendar.get_next_contract(info["old_contract"])
-        if new_contract and info["size"] > 0:
+        """执行月初开仓（双策略各开各的）"""
+        infos = getattr(self, "_roll_infos", [])
+        if not infos:
+            return
+
+        new_contract = self.data_feed.calendar.get_next_contract(infos[0]["old_contract"])
+        if not new_contract:
+            return
+
+        total_size = 0
+        total_direction = ""
+
+        for info in infos:
+            src = info["source"]
             price_gap = bar["open"] - info["close_price"]
             roll_adj = -price_gap * info["size"] if info["direction"] == "多" else price_gap * info["size"]
 
-            strategy_pnl = getattr(self, "_last_roll_pnl", 0.0)
+            # 换月调整记录
             transfer = TransferRecord(
                 roll_date=dt, old_contract=info["old_contract"], new_contract=new_contract,
                 old_close_price=info["close_price"], new_open_price=bar["open"],
-                price_gap=price_gap, strategy_pnl=strategy_pnl, roll_adjustment=roll_adj,
-                size=info["size"], direction=info["direction"], source=info.get("source", ""),
+                price_gap=price_gap, strategy_pnl=info["pnl"], roll_adjustment=roll_adj,
+                size=info["size"], direction=info["direction"], source=src,
             )
             self.account.execute_rollover(transfer)
 
-            self.account.add_transfer_to_complete_trade(
-                info["close_date"], info["close_price"], dt, bar["open"])
-            
-            src = info.get("source", "")
-            new_pos = Position(
-                contract=new_contract,
-                size=info["size"] if info["direction"] == "多" else -info["size"],
-                direction=info["direction"], entry_price=bar["open"], entry_date=dt,
-                original_entry_price=info.get("original_entry_price", bar["open"]),
-                trade_id=info.get("trade_id", ""), source=src,
-                highest_price=info.get("highest_price", bar["open"]),
-                lowest_price=info.get("lowest_price", bar["open"]),
-                total_holding_days=info.get("total_holding_days", 0),
-                transfer_count=len(self.account.transfers),
-                half_reduced=info.get("half_reduced", False),
+            # 重新开子策略仓位
+            sub_pos = self.pos_mgr.get_sub_position(src)
+            sub_pos.open(info["direction"], bar["open"], info["size"])
+
+            total_size += info["size"]
+            total_direction = info["direction"]
+
+            self._log("换月",
+                f"月初开仓 [{src}] {info['direction']} {info['size']}手 @ {bar['open']:.2f}, "
+                f"价差调整: {roll_adj:+,.2f}"
             )
-            self.account.position = new_pos
-            self._log("换月", f"月初开仓 {src} {info['direction']} {info['size']}手 @ {bar['open']:.2f}, 价差调整: {roll_adj:+,.2f}")
+
+        # 重新设置账户综合仓位
+        if total_size > 0:
+            self.account.position = Position(
+                contract=new_contract,
+                size=total_size if total_direction == "多" else -total_size,
+                direction=total_direction, entry_price=bar["open"], entry_date=dt,
+                original_entry_price=bar["open"],
+                trade_id="", source="combined",
+                total_holding_days=0, transfer_count=0,
+            )
 
     def _handle_final_close(self, df, dates):
         """处理回测结束平仓"""
