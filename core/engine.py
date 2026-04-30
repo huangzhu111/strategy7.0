@@ -12,6 +12,7 @@ from portfolio.account import FuturesAccount
 from portfolio.position import Position, TransferRecord
 from portfolio.trade import TradeRecord, CompleteTrade, generate_trade_id
 from portfolio.position_manager import PositionManager
+from portfolio.allocator import PositionAllocator
 from execution.rollover import ContractRollover
 from execution.executor import OrderExecutor
 from strategy.trend_strategy import TrendStrategy
@@ -41,9 +42,12 @@ class FuturesBacktestEngine:
         self.analytics = PerformanceAttribution()
         self.stop_loss_manager = StopLossManager(self.config.stop_loss, self.indicators)
 
-        # 各子策略独立资金
-        self.trend_capital = self.config.account.initial_capital * self.config.position_manager.trend_capital_ratio
-        self.rsi_capital = self.config.account.initial_capital * self.config.position_manager.rsi_capital_ratio
+        # 仓位分配器（统一计算总仓位对半分）
+        self.allocator = PositionAllocator(
+            total_capital=self.config.account.initial_capital,
+            price_per_hand=self.config.rsi_strategy.price_per_hand,
+            max_position=self.config.rsi_strategy.max_position,
+        )
 
         self.index_series: List[float] = []
         self.volume_series: List[float] = []
@@ -94,10 +98,9 @@ class FuturesBacktestEngine:
             for source_name, strategy_obj in [("trend", self.trend_strategy),
                                                ("rsi", self.rsi_strategy)]:
                 sub_pos = self.pos_mgr.get_sub_position(source_name)
-                allocated_cap = self.rsi_capital if source_name == "rsi" else self.trend_capital
                 signals = strategy_obj.generate_signals(
                     bar, prev_bar, self.index_series, sub_pos.size, self.volume_series,
-                    allocated_capital=allocated_cap,
+                    allocator=self.allocator,
                 )
                 for signal in signals:
                     signal.source = source_name
@@ -252,13 +255,9 @@ class FuturesBacktestEngine:
         elif signal.signal_type in ["bull", "bear", "bobaniu"]:
             if not self.account.has_position():
                 sub_pos = self.pos_mgr.get_sub_position(source)
-                # 趋势策略用独立资金计算仓位
-                total_val = self.trend_capital + sub_pos.strategy_pnl
-                size = OrderExecutor.calculate_position_size(
-                    total_val, bar["open"],
-                    self.config.account.position_ratio,
-                    self.config.account.position_round,
-                )
+                # 趋势策略通过分配器计算仓位
+                ratio = self.config.trend_strategy.position_ratio
+                size = self.allocator.get_trend_position(bar["open"], ratio)
                 # 综合上限
                 if size + self.pos_mgr.net_abs_size > self.pos_mgr.combined_max:
                     size = self.pos_mgr.combined_max - self.pos_mgr.net_abs_size

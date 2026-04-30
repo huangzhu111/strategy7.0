@@ -25,6 +25,9 @@ class TrendStrategyConfig:
     volume_filter_enabled: bool = False
     volume_lookback_days: int = 10
 
+    # 趋势仓位比例（总资金的百分之多少用于开仓）
+    position_ratio: float = 0.5
+
     # 双策略模式下禁用RSI风控（RSI策略负责）
     disable_rsi_risk: bool = True
 
