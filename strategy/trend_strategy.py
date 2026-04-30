@@ -134,6 +134,9 @@ class TrendStrategy:
 
     def manage_risk(self, bar: dict, index_series: list, position_size: int) -> Optional[RiskAction]:
         """趋势策略的风险管理"""
+        # 双策略模式下跳过RSI风控（由RSI策略负责）
+        if self.config.disable_rsi_risk:
+            return None
         if position_size == 0:
             return None
         index_list = list(index_series) + [bar["index"]]

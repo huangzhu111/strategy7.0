@@ -25,6 +25,9 @@ class TrendStrategyConfig:
     volume_filter_enabled: bool = False
     volume_lookback_days: int = 10
 
+    # 双策略模式下禁用RSI风控（RSI策略负责）
+    disable_rsi_risk: bool = True
+
     # 基差过滤
     basis_amplitude: int = -7000
     basis_decay_rate: float = 0.002
@@ -72,6 +75,9 @@ class PositionManagerConfig:
     """仓位管理配置"""
     # 综合仓位上限
     combined_max_position: int = 600
+    # 子策略资金分配比例
+    trend_capital_ratio: float = 0.50   # 趋势策略分配50%初始资金
+    rsi_capital_ratio: float = 0.50     # RSI策略分配50%初始资金
 
 
 @dataclass

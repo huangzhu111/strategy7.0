@@ -41,6 +41,10 @@ class FuturesBacktestEngine:
         self.analytics = PerformanceAttribution()
         self.stop_loss_manager = StopLossManager(self.config.stop_loss, self.indicators)
 
+        # 各子策略独立资金
+        self.trend_capital = self.config.account.initial_capital * self.config.position_manager.trend_capital_ratio
+        self.rsi_capital = self.config.account.initial_capital * self.config.position_manager.rsi_capital_ratio
+
         self.index_series: List[float] = []
         self.volume_series: List[float] = []
         self.log_file = None
@@ -246,7 +250,8 @@ class FuturesBacktestEngine:
         elif signal.signal_type in ["bull", "bear", "bobaniu"]:
             if not self.account.has_position():
                 sub_pos = self.pos_mgr.get_sub_position(source)
-                total_val = self.account.get_total_value(bar["close"])
+                # 趋势策略用独立资金计算仓位
+                total_val = self.trend_capital + sub_pos.strategy_pnl
                 size = OrderExecutor.calculate_position_size(
                     total_val, bar["open"],
                     self.config.account.position_ratio,
