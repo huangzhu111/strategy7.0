@@ -28,7 +28,8 @@ class TrendStrategy:
         self.bobaniu_days = 0
 
     def generate_signals(self, bar: dict, prev_bar: dict, index_series: list,
-                         position_size: int, volume_series: list = None) -> List[Signal]:
+                         position_size: int, volume_series: list = None,
+                         allocated_capital: float = None, **kwargs) -> List[Signal]:
         """生成趋势策略信号"""
         signals = []
         index_list = list(index_series) + [bar["index"]]

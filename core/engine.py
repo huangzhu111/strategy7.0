@@ -94,8 +94,10 @@ class FuturesBacktestEngine:
             for source_name, strategy_obj in [("trend", self.trend_strategy),
                                                ("rsi", self.rsi_strategy)]:
                 sub_pos = self.pos_mgr.get_sub_position(source_name)
+                allocated_cap = self.rsi_capital if source_name == "rsi" else self.trend_capital
                 signals = strategy_obj.generate_signals(
                     bar, prev_bar, self.index_series, sub_pos.size, self.volume_series,
+                    allocated_capital=allocated_cap,
                 )
                 for signal in signals:
                     signal.source = source_name

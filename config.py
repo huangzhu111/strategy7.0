@@ -68,6 +68,16 @@ class RSIStrategyConfig:
 
     # 仓位上限
     max_position: int = 400
+    # RSI分段仓位值（新公式: 仓位 = 资金 / (10000*400) × 分段值）
+    price_per_hand: int = 10000       # 每手合约价值基数
+    # 超卖（买入）分段值
+    segment_moderate_buy: int = 10     # RSI 20-25
+    segment_severe_buy: int = 20       # RSI 15-20
+    segment_extreme_buy: int = 40      # RSI < 15
+    # 超买（卖出）分段值
+    segment_moderate_sell: int = 10    # RSI 85-90
+    segment_severe_sell: int = 20      # RSI 90-95
+    segment_extreme_sell: int = 40     # RSI >= 95
 
 
 @dataclass
