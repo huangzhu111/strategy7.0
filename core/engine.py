@@ -157,29 +157,57 @@ class FuturesBacktestEngine:
 
         if signal.signal_type in ["close_long", "close_short"]:
             if self.account.position:
-                # 找到对应子策略的仓位
                 sub_pos = self.pos_mgr.get_sub_position(source)
-                if sub_pos.has_position:
-                    sub_pos.close(signal.entry_price, signal.size)
+                if not sub_pos.has_position:
+                    return  # 该策略无仓位，跳过
 
-                trade = OrderExecutor.close_position(
-                    self.account.position, signal.entry_price, dt, signal.reason
+                close_size = min(signal.size, sub_pos.abs_size)
+                if close_size <= 0:
+                    return
+
+                # 用子策略自己的入场价算盈亏（不依赖账户均价）
+                if sub_pos.direction == "多":
+                    pnl = (signal.entry_price - sub_pos.entry_price) * close_size
+                else:
+                    pnl = (sub_pos.entry_price - signal.entry_price) * close_size
+
+                sub_pos.close(signal.entry_price, close_size)
+
+                commission = CommissionCalculator.calculate_for_trade(signal.entry_price, close_size)
+                trade = TradeRecord(
+                    trade_id=generate_trade_id(), signal_type=signal.signal_type,
+                    direction=sub_pos.direction,
+                    entry_date=self.account.position.entry_date,
+                    entry_price=sub_pos.entry_price,
+                    exit_date=dt, exit_price=signal.entry_price,
+                    size=close_size, pnl=pnl, commission=commission,
+                    transfer_count=self.account.position.transfer_count,
+                    is_closed=True, source=source,
+                    contract=self.account.position.contract,
                 )
-                trade.source = source
                 self.account.execute_strategy_trade(trade, source)
 
-                self.account.close_complete_trade(
-                    exit_price=signal.entry_price, exit_date=dt,
-                    commission=trade.commission,
-                    total_holding_days=self.account.position.total_holding_days
-                    if self.account.position else 0,
-                )
+                # 如果是全平或只剩一个策略了
+                new_size = abs(self.account.position.size) - close_size
+                if new_size <= 0:
+                    self.account.close_complete_trade(
+                        exit_price=signal.entry_price, exit_date=dt,
+                        commission=commission,
+                        total_holding_days=self.account.position.total_holding_days
+                        if self.account.position else 0,
+                    )
+                    self.account.position = None
+                else:
+                    # 只减仓，另一个策略继续持有
+                    self.account.position.size = \
+                        new_size if self.account.position.direction == "多" else -new_size
+                    self.account.add_partial_close_to_complete_trade(
+                        signal.entry_price, close_size, dt, commission)
 
                 self._log("交易",
-                    f"[{source}] {signal.direction} {trade.size}手 @ {signal.entry_price:.2f}, "
-                    f"盈亏: {trade.pnl:+,.2f} | {self.pos_mgr.get_summary()}"
+                    f"[{source}] {sub_pos.direction} {close_size}手 @ {signal.entry_price:.2f}, "
+                    f"盈亏: {pnl:+,.2f} (子策略独立平仓) | {self.pos_mgr.get_summary()}"
                 )
-                self.account.position = None
 
         elif signal.signal_type in ["buy", "sell"]:
             sub_pos = self.pos_mgr.get_sub_position(source)
