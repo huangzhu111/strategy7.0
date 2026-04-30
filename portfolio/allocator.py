@@ -24,10 +24,10 @@ class PositionAllocator:
 
     def get_rsi_position(self, segment_value: int) -> int:
         """
-        RSI策略仓位：总资金 / (price_per_hand × max_position) × segment_value
+        RSI策略仓位：总资金 × 50% / (price_per_hand × max_position) × segment_value
         segment_value: 超买超卖程度（10/20/40）
         """
-        raw = self.total_capital / (self.price_per_hand * self.max_position) * segment_value
+        raw = self.total_capital * 0.5 / (self.price_per_hand * self.max_position) * segment_value
         return max(1, int(raw))
 
     def update_capital(self, new_capital: float):
