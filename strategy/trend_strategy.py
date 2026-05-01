@@ -145,9 +145,7 @@ class TrendStrategy:
         rsi = self.indicators.calculate_rsi(index_pd, self.config.rsi_period).iloc[-1]
 
         if rsi >= self.config.rsi_extreme_overbought:
-            return RiskAction("close_all", abs(position_size), bar["low"], f"RSI极度超买清仓 ({rsi:.2f})", )
-        if rsi >= self.config.rsi_overbought:
-            return RiskAction("reduce_half", abs(position_size) // 2, bar["low"], f"RSI超买减仓 ({rsi:.2f})")
+            return RiskAction("close_all", abs(position_size), bar["low"], f"RSI极度超买清仓 ({rsi:.2f})")
         if rsi <= self.config.rsi_oversold:
             return RiskAction("close_all", abs(position_size), bar["high"], f"RSI超卖清仓 ({rsi:.2f})")
         return None

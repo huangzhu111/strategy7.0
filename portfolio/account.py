@@ -88,8 +88,9 @@ class FuturesAccount:
         self._update_risk_metrics()
 
     def execute_rollover(self, transfer: TransferRecord):
+        # 策略盈亏已在 execute_strategy_trade 中计入，这里只加换月价差调整
         self.roll_adjustments += transfer.roll_adjustment
-        self.current_capital += transfer.strategy_pnl + transfer.roll_adjustment
+        self.current_capital += transfer.roll_adjustment
         self.transfers.append(transfer)
         self._update_risk_metrics()
 

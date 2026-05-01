@@ -94,7 +94,11 @@ class FuturesBacktestEngine:
                     self._execute_roll_open(dt, bar)
                     self._pending_roll = False
 
-            # 步骤2：同时运行两个策略的信号
+            # 步骤2：动态更新仓位分配器（每次都用当前资金计算）
+            self.allocator.update_capital(self.account.current_capital)
+
+            # 步骤2：同时运行两个策略的信号（先收集，后统一执行）
+            all_signals = []
             for source_name, strategy_obj in [("trend", self.trend_strategy),
                                                ("rsi", self.rsi_strategy)]:
                 sub_pos = self.pos_mgr.get_sub_position(source_name)
@@ -104,7 +108,20 @@ class FuturesBacktestEngine:
                 )
                 for signal in signals:
                     signal.source = source_name
-                    self._execute_signal(signal, bar, dt)
+                all_signals.extend(signals)
+
+            # 统一仓位管理：趋势策略决定方向，RSI只能顺向操作
+            trend_pos = self.pos_mgr.get_sub_position("trend")
+            trend_direction = trend_pos.direction if trend_pos.has_position else None
+            for signal in all_signals:
+                # RSI开仓方向必须与趋势方向一致（或趋势无仓位时自由操作）
+                if signal.source == "rsi" and signal.signal_type in ["buy", "sell"]:
+                    if trend_direction is not None and signal.direction != trend_direction:
+                        self._log("冲突",
+                            f"[rsi] 方向冲突: 趋势={trend_direction}, RSI信号={signal.direction}, 跳过 {signal.reason}"
+                        )
+                        continue
+                self._execute_signal(signal, bar, dt)
 
             # 步骤3：止损检查
             if self.account.position and self.account.position.size != 0:
@@ -503,12 +520,27 @@ class FuturesBacktestEngine:
             )
             self.account.execute_rollover(transfer)
 
-            # 重新开子策略仓位
+            # 重新开子策略仓位（检查仓位上限）
             sub_pos = self.pos_mgr.get_sub_position(src)
-            sub_pos.open(info["direction"], bar["open"], info["size"])
-
-            total_size += info["size"]
-            total_direction = info["direction"]
+            reopen_size = info["size"]
+            
+            # RSI策略：不超过动态仓位上限
+            if src == "rsi":
+                rsi_max = self.allocator.get_rsi_max_position()
+                if reopen_size > rsi_max:
+                    self._log("换月", f"[rsi] 转仓仓位 {reopen_size}手 超过上限 {rsi_max}手，缩减至上限")
+                    reopen_size = rsi_max
+            
+            # 综合仓位上限
+            current_net = self.pos_mgr.net_abs_size
+            if current_net + reopen_size > self.pos_mgr.combined_max:
+                reopen_size = max(1, self.pos_mgr.combined_max - current_net)
+                self._log("换月", f"[{src}] 转仓缩减至 {reopen_size}手（综合上限 {self.pos_mgr.combined_max}）")
+            
+            if reopen_size > 0:
+                sub_pos.open(info["direction"], bar["open"], reopen_size)
+                total_size += reopen_size
+                total_direction = info["direction"]
 
             self._log("换月",
                 f"月初开仓 [{src}] {info['direction']} {info['size']}手 @ {bar['open']:.2f}, "
@@ -527,37 +559,44 @@ class FuturesBacktestEngine:
             )
 
     def _handle_final_close(self, df, dates):
-        """处理回测结束平仓"""
+        """处理回测结束平仓 — 分别平掉两个子策略的仓位"""
         last_dt = dates[-1]
         last_bar = df.loc[last_dt].to_dict()
         last_bar["datetime"] = last_dt
         position = self.account.position
-        src = position.source
 
-        if position.direction == "多":
-            pnl = (last_bar["close"] - position.entry_price) * position.size
-        else:
-            pnl = (position.entry_price - last_bar["close"]) * abs(position.size)
+        if not position or position.size == 0:
+            return
 
-        trade = TradeRecord(
-            trade_id=generate_trade_id(), signal_type="回测结束平仓",
-            direction=position.direction, entry_date=position.entry_date,
-            entry_price=position.entry_price, exit_date=last_dt,
-            exit_price=last_bar["close"], size=abs(position.size),
-            pnl=pnl, commission=0.0, transfer_count=position.transfer_count,
-            is_closed=True, source=src, contract=position.contract,
-        )
-        self.account.execute_strategy_trade(trade, src)
+        # 分别处理每个子策略的平仓
+        for src_name in ["trend", "rsi"]:
+            sub_pos = self.pos_mgr.get_sub_position(src_name)
+            if not sub_pos.has_position:
+                continue
 
-        sub_pos = self.pos_mgr.get_sub_position(src)
-        sub_pos.close(last_bar["close"], abs(sub_pos.size))
+            if sub_pos.direction == "多":
+                pnl = (last_bar["close"] - sub_pos.entry_price) * sub_pos.abs_size
+            else:
+                pnl = (sub_pos.entry_price - last_bar["close"]) * sub_pos.abs_size
+
+            trade = TradeRecord(
+                trade_id=generate_trade_id(), signal_type="回测结束平仓",
+                direction=sub_pos.direction, entry_date=position.entry_date,
+                entry_price=sub_pos.entry_price, exit_date=last_dt,
+                exit_price=last_bar["close"], size=sub_pos.abs_size,
+                pnl=pnl, commission=0.0, transfer_count=position.transfer_count,
+                is_closed=True, source=src_name, contract=position.contract,
+            )
+            self.account.execute_strategy_trade(trade, src_name)
+            sub_pos.close(last_bar["close"], sub_pos.abs_size)
+
+            self._log("系统", f"回测结束平仓 [{src_name}] {sub_pos.direction} {sub_pos.abs_size}手 @ {last_bar['close']:.2f}, 盈亏: {pnl:+,.2f}")
 
         self.account.close_complete_trade(
             exit_price=last_bar["close"], exit_date=last_dt, commission=0.0,
             total_holding_days=position.total_holding_days,
         )
         self.account.position = None
-        self._log("系统", f"回测结束强制平仓 {src} {position.direction} {abs(position.size)}手 @ {last_bar['close']:.2f}")
 
     def _print_trade_details(self):
         """打印完整交易明细"""

@@ -48,9 +48,10 @@ class RSIStrategy:
         if rsi < self.config.rsi_oversold:
             seg_val, label = self._segment_value(rsi)
             buy_sz = allocator.get_rsi_position(seg_val) if allocator else 10
-            # 仓位上限
+            # 仓位上限（动态计算）
+            max_pos = allocator.get_rsi_max_position() if allocator else self.config.max_position
             if position_size > 0:
-                buy_sz = min(buy_sz, self.config.max_position - position_size)
+                buy_sz = min(buy_sz, max_pos - position_size)
             if buy_sz > 0:
                 signals.append(Signal("buy", "多", bar["close"], buy_sz,
                                       f"RSI{label}买入 RSI={rsi:.2f}", source="rsi"))
@@ -64,8 +65,9 @@ class RSIStrategy:
         if rsi >= self.config.rsi_overbought:
             seg_val, label = self._segment_value(rsi)
             sell_sz = allocator.get_rsi_position(seg_val) if allocator else 10
+            max_pos = allocator.get_rsi_max_position() if allocator else self.config.max_position
             if position_size < 0:
-                sell_sz = min(sell_sz, self.config.max_position - abs(position_size))
+                sell_sz = min(sell_sz, max_pos - abs(position_size))
             if sell_sz > 0:
                 signals.append(Signal("sell", "空", bar["close"], sell_sz,
                                       f"RSI{label}卖出 RSI={rsi:.2f}", source="rsi"))

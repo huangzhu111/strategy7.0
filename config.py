@@ -13,8 +13,8 @@ class TrendStrategyConfig:
     ma_period: int = 10
     rsi_period: int = 11
     rsi_overbought: float = 80.0
-    rsi_extreme_overbought: float = 90.0
-    rsi_oversold: float = 24.5
+    rsi_extreme_overbought: float = 85.0
+    rsi_oversold: float = 25.0
     bull_price_change: int = 500
     bear_price_change: int = 100
     bobaniu_price_change: int = 550
@@ -28,7 +28,7 @@ class TrendStrategyConfig:
     # 趋势仓位比例（总资金的百分之多少用于开仓）
     position_ratio: float = 0.5
 
-    # 双策略模式下禁用RSI风控（RSI策略负责）
+    # 双策略模式下禁用RSI风控（由统一仓位管理处理）
     disable_rsi_risk: bool = True
 
     # 基差过滤
@@ -118,7 +118,7 @@ class DataConfig:
     vps_port: int = 22
     vps_username: str = "root"
     vps_db_path: str = "/root/ffa-data/messages.db"
-    from_date: str = "2018-01-01"
+    from_date: str = "2020-12-15"
     to_date: str = "2026-12-31"
 
 

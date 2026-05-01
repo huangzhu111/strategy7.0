@@ -13,6 +13,16 @@ class PositionAllocator:
         self.total_capital = total_capital
         self.price_per_hand = price_per_hand
         self.max_position = max_position
+        self.dynamic_max_position = self._calc_dynamic_max()
+
+    def _calc_dynamic_max(self) -> int:
+        """动态RSI仓位上限 = 总资产 / 2 / 10000"""
+        raw = self.total_capital / 2 / self.price_per_hand
+        return max(1, int(raw))
+
+    def get_rsi_max_position(self) -> int:
+        """获取RSI当前动态仓位上限"""
+        return self.dynamic_max_position
 
     def get_trend_position(self, price: float, ratio: float = 0.5) -> int:
         """
@@ -33,3 +43,4 @@ class PositionAllocator:
     def update_capital(self, new_capital: float):
         """更新资金"""
         self.total_capital = new_capital
+        self.dynamic_max_position = self._calc_dynamic_max()
